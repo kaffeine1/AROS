@@ -22,5 +22,7 @@ static inline struct Node *RemHead(struct List *l) { struct Node *n = l->lh_Head
 #define CACRF_CopyBack 4
 #define OpenLibrary(name, ver) ((struct Library *)0)
 #define CloseLibrary(lib) ((void)0)
+/* one task, and it holds every lock: an ss_Owner of the stubs is never set */
+#define FindTask(name) ((struct Task *)0)
 #define GetVar(name, buf, len, flags) (-1)
 #define IsMinListEmpty(l) (((struct MinList *)(l))->mlh_TailPred == (struct MinNode *)(l))

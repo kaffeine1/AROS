@@ -14,17 +14,22 @@
 #include "gfxfuncsupport.h"
 
 void BltTemplateBasedText(struct RastPort *rp, CONST_STRPTR text, ULONG len,
+                          const struct TextExtent *extent, BOOL cells8,
                           struct GfxBase *GfxBase);
 
 void BltTemplateAlphaBasedText(struct RastPort *rp, CONST_STRPTR text, ULONG len,
+                               const struct TextExtent *extent,
                                struct GfxBase *GfxBase);
 
 void ColorFontBasedText(struct RastPort *rp, CONST_STRPTR text, ULONG len,
+                        const struct TextExtent *extent,
                         struct GfxBase *GfxBase);
 
-/* The functions above work out the extent of what they draw with
-   TextExtent(), into WORDs, and size their raster and count its columns in
-   WORDs too, so Text() hands them a text a piece at a time. */
+/* The functions above keep the extent of what they draw in WORDs, and size
+   their raster and count its columns in WORDs too, so Text() hands them a
+   text a piece at a time. It measures each piece once, and they take the
+   extent from it instead of calling TextExtent(): a text is gone through
+   once before it is drawn. */
 #define TEXT_PIECE 16384
 
 struct text_piece
@@ -32,6 +37,8 @@ struct text_piece
     ULONG count;            /* characters */
     LONG advance;           /* what TextLength() gives for them */
     LONG minx, maxx;        /* their te_Extent, as TextExtent() works it out */
+    BOOL cells8;            /* each is a byte-aligned glyph 8 pixels wide, with
+                               no kerning and a space of 8 */
 };
 
 #define EXTEND(lo, hi, x) do { if ((x) < (lo)) (lo) = (x); if ((x) > (hi)) (hi) = (x); } while (0)
@@ -46,6 +53,7 @@ static void text_piece(struct RastPort *rp, CONST_STRPTR text, ULONG len, QUAD p
 {
     struct TextFont *tf = rp->Font;
     LONG x = 0, lo = 0, hi = 0, left = 0, right = 0;
+    BOOL cells8 = TRUE;
     ULONG n;
 
     if (rp->AlgoStyle & FSF_BOLD)
@@ -59,12 +67,13 @@ static void text_piece(struct RastPort *rp, CONST_STRPTR text, ULONG len, QUAD p
     {
         UBYTE c = text[n];
         ULONG idx = (c < tf->tf_LoChar || c > tf->tf_HiChar) ? NUMCHARS(tf) - 1 : c - tf->tf_LoChar;
+        ULONG charloc = ((ULONG *)tf->tf_CharLoc)[idx];
         LONG nx = x, nlo = lo, nhi = hi, minx, maxx;
 
         if (tf->tf_CharKern)
             nx += ((WORD *)tf->tf_CharKern)[idx];
         EXTEND(nlo, nhi, nx);
-        EXTEND(nlo, nhi, nx + (LONG)(((ULONG *)tf->tf_CharLoc)[idx] & 0xFFFF));
+        EXTEND(nlo, nhi, nx + (LONG)(charloc & 0xFFFF));
         nx += tf->tf_CharSpace ? ((WORD *)tf->tf_CharSpace)[idx] : tf->tf_XSize;
         EXTEND(nlo, nhi, nx);
         nx += rp->TxSpacing;
@@ -79,9 +88,14 @@ static void text_piece(struct RastPort *rp, CONST_STRPTR text, ULONG len, QUAD p
         hi = nhi;
         p->minx = minx;
         p->maxx = maxx;
+        if ((charloc & 0xFFFF) != 8 || ((charloc >> 16) & 7) ||
+            (tf->tf_CharKern && ((WORD *)tf->tf_CharKern)[idx] != 0) ||
+            (tf->tf_CharSpace && ((WORD *)tf->tf_CharSpace)[idx] != 8))
+            cells8 = FALSE;
     }
     p->count = n;
     p->advance = x;
+    p->cells8 = cells8;
 }
 
 /*****************************************************************************
@@ -163,14 +177,23 @@ static void text_piece(struct RastPort *rp, CONST_STRPTR text, ULONG len, QUAD p
             if (!tall && piece.maxx >= piece.minx && piece.maxx - piece.minx < TEXT_PIECE &&
                 pos >= -32768 && pos <= 32767 &&
                 pos + piece.minx >= -32768 && pos + piece.maxx <= 32767) {
+                struct TextExtent te;
+
+                /* what TextExtent() gives for the piece */
+                te.te_Width = piece.advance;
+                te.te_Height = ctf->ctf_TF.tf_YSize;
+                te.te_Extent.MinX = piece.minx;
+                te.te_Extent.MaxX = piece.maxx;
+                te.te_Extent.MinY = -ctf->ctf_TF.tf_Baseline;
+                te.te_Extent.MaxY = te.te_Height - 1 - ctf->ctf_TF.tf_Baseline;
                 if (rp->cp_x != pos)
                     Move(rp, (WORD)pos, rp->cp_y);
                 if(antialias) {
-                    BltTemplateAlphaBasedText(rp, string, piece.count, GfxBase);
+                    BltTemplateAlphaBasedText(rp, string, piece.count, &te, GfxBase);
                 } else if(colorfont) {
-                    ColorFontBasedText(rp, string, piece.count, GfxBase);
+                    ColorFontBasedText(rp, string, piece.count, &te, GfxBase);
                 } else {
-                    BltTemplateBasedText(rp, string, piece.count, GfxBase);
+                    BltTemplateBasedText(rp, string, piece.count, &te, piece.cells8, GfxBase);
                 }
             }
             pos += piece.advance;
@@ -185,9 +208,10 @@ static void text_piece(struct RastPort *rp, CONST_STRPTR text, ULONG len, QUAD p
 /***************************************************************************/
 
 void BltTemplateBasedText(struct RastPort *rp, CONST_STRPTR text, ULONG len,
+                          const struct TextExtent *extent, BOOL cells8,
                           struct GfxBase *GfxBase)
 {
-    struct TextExtent    te;
+    struct TextExtent    te = *extent;
     struct TextFont     *tf;
     WORD                 raswidth, raswidth16, raswidth_bpr, rasheight, x, y, gx;
     UBYTE               *raster;
@@ -198,43 +222,10 @@ void BltTemplateBasedText(struct RastPort *rp, CONST_STRPTR text, ULONG len,
     tf = rp->Font;
     is_bold = (rp->AlgoStyle & FSF_BOLD) != 0;
     is_italic = (rp->AlgoStyle & FSF_ITALIC) != 0;
-    fastfont = !is_bold && !is_italic && tf->tf_XSize == 8 &&
+    /* Text() has measured the piece, and seen whether each of its glyphs
+       is a byte-aligned cell of 8 pixels */
+    fastfont = cells8 && !is_bold && !is_italic && tf->tf_XSize == 8 &&
                rp->TxSpacing == 0;
-
-    if (fastfont)
-    {
-        ULONG i;
-
-        for (i = 0; i < len; i++)
-        {
-            UBYTE c = text[i];
-            ULONG idx = (c < tf->tf_LoChar || c > tf->tf_HiChar) ?
-                        NUMCHARS(tf) - 1 : c - tf->tf_LoChar;
-            ULONG charloc = ((ULONG *)tf->tf_CharLoc)[idx];
-
-            if ((charloc & 0xFFFF) != 8 || ((charloc >> 16) & 7) ||
-                (tf->tf_CharKern &&
-                    ((WORD *)tf->tf_CharKern)[idx] != 0) ||
-                (tf->tf_CharSpace &&
-                    ((WORD *)tf->tf_CharSpace)[idx] != 8))
-            {
-                fastfont = FALSE;
-                break;
-            }
-        }
-    }
-
-    if (fastfont)
-    {
-        te.te_Width = len * 8;
-        te.te_Height = tf->tf_YSize;
-        te.te_Extent.MinX = 0;
-        te.te_Extent.MaxX = te.te_Width - 1;
-        te.te_Extent.MinY = -tf->tf_Baseline;
-        te.te_Extent.MaxY = te.te_Height - 1 - tf->tf_Baseline;
-    }
-    else
-        TextExtent(rp, text, len, &te);
 
     raswidth  = te.te_Extent.MaxX - te.te_Extent.MinX + 1;
     rasheight = te.te_Extent.MaxY - te.te_Extent.MinY + 1;
@@ -613,9 +604,10 @@ static void chunky_text(struct RastPort *rp, CONST_STRPTR text, ULONG len, UBYTE
 
 
 void BltTemplateAlphaBasedText(struct RastPort *rp, CONST_STRPTR text, ULONG len,
+                               const struct TextExtent *extent,
                                struct GfxBase *GfxBase)
 {
-    struct TextExtent    te;
+    struct TextExtent    te = *extent;
     WORD                 raswidth, raswidth_bpr, rasheight;
     UBYTE               *raster;
 
@@ -624,8 +616,6 @@ void BltTemplateAlphaBasedText(struct RastPort *rp, CONST_STRPTR text, ULONG len
         CyberGfxBase = OpenLibrary("cybergraphics.library", 0);
     if(!CyberGfxBase)
         return;
-
-    TextExtent(rp, text, len, &te);
 
     raswidth  = te.te_Extent.MaxX - te.te_Extent.MinX + 1;
     rasheight = te.te_Extent.MaxY - te.te_Extent.MinY + 1;
@@ -688,9 +678,10 @@ void BltTemplateAlphaBasedText(struct RastPort *rp, CONST_STRPTR text, ULONG len
 /***************************************************************************/
 
 void ColorFontBasedText(struct RastPort *rp, CONST_STRPTR text, ULONG len,
+                        const struct TextExtent *extent,
                         struct GfxBase *GfxBase)
 {
-    struct TextExtent    te;
+    struct TextExtent    te = *extent;
     struct TextFont     *tf;
     WORD                 raswidth, raswidth_bpr, rasheight;
     UBYTE               *raster, *chunky;
@@ -699,8 +690,6 @@ void ColorFontBasedText(struct RastPort *rp, CONST_STRPTR text, ULONG len,
     if(!ExtendFont(tf, NULL)) return;
 
     chunky = ((struct TextFontExtension_intern *)(tf->tf_Extension))->hash->chunky_colorfont;
-
-    TextExtent(rp, text, len, &te);
 
     if((rp->DrawMode & ~INVERSVID) == JAM2) {
         ULONG             old_drmd = GetDrMd(rp);

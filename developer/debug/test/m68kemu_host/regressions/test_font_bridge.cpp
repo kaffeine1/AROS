@@ -42,7 +42,7 @@ using Tag = ULONG;
 
 struct AnyPtr {
     void *p;
-    AnyPtr(void *ptr = nullptr) : p(ptr) {}
+    explicit AnyPtr(void *ptr = nullptr) : p(ptr) {}
     template <typename T> operator T *() const { return static_cast<T *>(p); }
     explicit operator bool() const { return p != nullptr; }
     bool operator!() const { return p == nullptr; }
@@ -184,7 +184,7 @@ struct M68KEmuContext {
     BOOL trace_calls;
     BOOL shadow_full_logged;
     UWORD num_gobjs;
-    struct { APTR font; ULONG name; } fontnames[16];
+    struct { void *font; ULONG name; } fontnames[16];
     M68KFakeLibBase libs[8];
     UWORD num_libs;
     struct {
@@ -200,8 +200,8 @@ struct M68KEmuContext {
 
 static inline AnyPtr m68k_to_host(struct M68KEmuContext *ctx, ULONG addr)
 {
-    if (addr == 0 || addr >= ctx->mem_size) return nullptr;
-    return ctx->mem + addr;
+    if (addr == 0 || addr >= ctx->mem_size) return AnyPtr();
+    return AnyPtr(ctx->mem + addr);
 }
 
 static inline void *m68k_to_host_or_shadow(struct M68KEmuContext *ctx, ULONG addr)
@@ -279,8 +279,8 @@ static void init_tf(struct TextFont &tf, char *name, UWORD ysize, UBYTE style, U
     tf.tf_Baseline = static_cast<UWORD>(ysize > 2 ? ysize - 2 : 1);
     tf.tf_LoChar = 32;
     tf.tf_HiChar = 34;
-    tf.tf_CharLoc = g_loc;
-    tf.tf_CharData = g_data;
+    tf.tf_CharLoc = AnyPtr(g_loc);
+    tf.tf_CharData = AnyPtr(g_data);
     tf.tf_Modulo = 4;
 }
 
@@ -292,7 +292,7 @@ static void init_fonts()
     std::strcpy(g_recycled_name_buf, "helvetica.font");
     init_tf(g_recycled_tf, g_recycled_name_buf, 13, FS_NORMAL, FPF_DISKFONT | FPF_DESIGNED);
     init_tf(g_outline_times, const_cast<char *>("times.font"), 16, FSF_TAGGED, FPF_DISKFONT | FPF_DESIGNED);
-    g_outline_times.tf_CharLoc = nullptr; /* verify ln_Name populates before early return */
+    g_outline_times.tf_CharLoc = AnyPtr(); /* verify ln_Name populates before early return */
     for (int i = 0; i < 24; i++)
     {
         std::snprintf(g_many_names[i], sizeof(g_many_names[i]), "fam%02d.font", i);
@@ -408,9 +408,10 @@ static void reset_env(struct M68KEmuContext &ctx, std::vector<UBYTE> &mem)
     m68k_write32(&ctx, M68KEMU_CHIP_END + FB_SIZE, ctx.rgn[RGN_FAST].avail);
 }
 
+/* A font name of the fixture, at most 31 characters, with its NUL. */
 static ULONG put_cstr(struct M68KEmuContext &ctx, ULONG at, const char *s)
 {
-    std::memcpy(ctx.mem + at, s, std::strlen(s) + 1);
+    std::memcpy(ctx.mem + at, s, ::strnlen(s, 31) + 1);
     return at;
 }
 

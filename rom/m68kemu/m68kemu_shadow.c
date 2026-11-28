@@ -398,7 +398,7 @@ ULONG m68k_font_name(struct M68KEmuContext *ctx, struct TextFont *tf)
                 strcmp((const char *)(ctx->mem + cn), s) == 0)
                 return cn;
         }
-    slen = strlen(s);
+    slen = strnlen(s, ctx->mem_size);
     if (slen >= ctx->mem_size)
         return 0;
     nlen = (ULONG)slen + 1;

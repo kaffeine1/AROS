@@ -60,7 +60,7 @@ def prepare(source, output):
                       dos.read_text(encoding='latin1')))
     constants = []
     for name in ('M68KEMU_MAX_SHADOWS', 'M68KEMU_MAX_HANDLES',
-                 'M68KEMU_HANDLE_BASE', 'M68K_SCR_BITMAP',
+                 'M68KEMU_HANDLE_BASE', 'M68K_SCR_BITMAP', 'M68K_SCR_LAYERINFO',
                  'MEMB_CLEAR', 'MEMF_CLEAR', 'DOS_EXALLCONTROL', 'DOS_FIB'):
         found = re.findall(r'^[ \t]*#define\s+' + re.escape(name) +
                            r'\s+([^\n]+)', text, re.M)

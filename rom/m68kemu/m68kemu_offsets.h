@@ -161,6 +161,7 @@
 #define M68K_SCR_TITLE              22
 #define M68K_SCR_VIEWPORT           44
 #define M68K_SCR_RASTPORT           84
+#define M68K_SCR_LAYERINFO          224
 #define M68K_SCR_BITMAP            184
 
 /* ── IntuiText struct offsets (m68k) ─────────────────────────────── */

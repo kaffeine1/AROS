@@ -230,6 +230,20 @@ static void m68k_aga_palette(struct M68KEmuContext *ctx, struct Screen *scr)
     ReleaseSemaphore(&pe->pe_Semaphore);
 }
 
+/* &Screen->LayerInfo (68k offset 224): programs lock the screen's layers
+   through it (MUI: LockLayerInfo(&w->WScreen->LayerInfo)). Without an entry
+   of its own the address resolves to the 68k copy in the program's memory,
+   which is no Layer_Info for native layers.library: its semaphore is not
+   one. The entry names the native Layer_Info; shadow_destroy() takes it
+   away with the screen's shadow. */
+static void screen_layerinfo_register(struct M68KEmuContext *ctx, ULONG ms, struct Screen *scr)
+{
+    const struct M68KStructLayout *lil = shadow_find_layout("Layer_Info");
+
+    if (lil && !shadow_lookup(ctx, ms + M68K_SCR_LAYERINFO))
+        shadow_register(ctx, ms + M68K_SCR_LAYERINFO, &scr->LayerInfo, lil->shadow_type);
+}
+
 void m68k_screen_extras(struct M68KEmuContext *ctx, ULONG ms, struct Screen *scr)
 {
     const struct M68KStructLayout *cml = shadow_find_layout("ColorMap");
@@ -284,6 +298,7 @@ void m68k_screen_extras(struct M68KEmuContext *ctx, ULONG ms, struct Screen *scr
         shadow_register(ctx, ms + M68K_SCR_VIEWPORT, &scr->ViewPort, 6);
     if (!shadow_lookup(ctx, ms + M68K_SCR_RASTPORT))
         shadow_register(ctx, ms + M68K_SCR_RASTPORT, &scr->RastPort, 3);
+    screen_layerinfo_register(ctx, ms, scr);
 
     /* sc_BitMap of a screen the program did not open: an AGA-like 8 plane
        description (no planes), so 1 << Depth names the 256 pens of the
@@ -451,6 +466,8 @@ void shadow_destroy(struct M68KEmuContext *ctx,
                     const struct M68KStructLayout *layout,
                     ULONG m68k_addr)
 {
+    if (layout && !strcmp(layout->name, "Screen"))
+        shadow_remove(ctx, m68k_addr + M68K_SCR_LAYERINFO);   /* its embedded Layer_Info entry */
     shadow_remove(ctx, m68k_addr);
     M68KEmu_HeapFree(ctx, m68k_addr, layout->m68k_size);
 }

@@ -1921,7 +1921,7 @@ static void readsectionfunctionlist(const char *type, struct functionhead **func
             }
 
             s2 = s;
-            while (isspace(*(s2-1)))
+            while (s2 > line && isspace(*(s2-1)))
                 s2--;
             *s2 = '\0';
 

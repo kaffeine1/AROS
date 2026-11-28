@@ -422,25 +422,25 @@ void parsetypeandname(struct functionarg *funcarg)
 
     /* Count the [] at the end of the argument */
     end = begin+strlen(begin);
-    while (isspace(*(end-1))) end--;
+    while (end > begin && isspace(*(end-1))) end--;
 
-    while (*(end-1)==']')
+    while (end > begin && *(end-1)==']')
     {
         brackets++;
         end--;
-        while (isspace(*(end-1)) || isalnum(*(end-1))) end--;
-        if (*(end-1)!='[')
+        while (end > begin && (isspace(*(end-1)) || isalnum(*(end-1)))) end--;
+        if (end == begin || *(end-1)!='[')
         {
             free(s);
             fprintf(stderr, "unmatched brackets found for arg: %s in function %s\n", funcarg->arg, funcarg->parent->name);
             exit(20);
         }
         end--;
-        while (isspace(*(end-1))) end--;
+        while (end > begin && isspace(*(end-1))) end--;
     }
 
     /* Pointer to function argument requires special handling */
-    if (*(end-1)==')')
+    if (end > begin && *(end-1)==')')
     {
         end = begin;
         while (*(end)!='(') end++;
@@ -469,7 +469,7 @@ void parsetypeandname(struct functionarg *funcarg)
 
     /* Regular argument */
     endname = end;
-    while (!isspace(*(end-1)) && *(end-1)!='*')
+    while (begin == end || (!isspace(*(end-1)) && *(end-1)!='*'))
     {
         if (begin == end)
         {
@@ -511,7 +511,7 @@ void parsetypeandname(struct functionarg *funcarg)
     funcarg->name[len] = '\0';
 
     /* Add * for the brackets */
-    while (isspace(*(end-1))) end--;
+    while (end > begin && isspace(*(end-1))) end--;
     for (i=0; i<brackets; i++)
     {
         *end='*';

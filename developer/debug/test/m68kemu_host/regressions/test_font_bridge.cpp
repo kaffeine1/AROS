@@ -42,7 +42,8 @@ using Tag = ULONG;
 
 struct AnyPtr {
     void *p;
-    explicit AnyPtr(void *ptr = nullptr) : p(ptr) {}
+    AnyPtr() : p(nullptr) {}
+    explicit AnyPtr(void *ptr) : p(ptr) {}
     template <typename T> operator T *() const { return static_cast<T *>(p); }
     explicit operator bool() const { return p != nullptr; }
     bool operator!() const { return p == nullptr; }
@@ -270,7 +271,7 @@ static struct RastPort *resolve_rp(struct M68KEmuContext *, ULONG mrp) { return 
 
 static void init_tf(struct TextFont &tf, char *name, UWORD ysize, UBYTE style, UBYTE flags)
 {
-    std::memset(&tf, 0, sizeof(tf));
+    tf = TextFont{};
     tf.tf_Message.mn_Node.ln_Name = name;
     tf.tf_YSize = ysize;
     tf.tf_Style = style;
@@ -383,7 +384,7 @@ static void reset_env(struct M68KEmuContext &ctx, std::vector<UBYTE> &mem)
     g_last_tags.clear();
     g_inspect_tags = true;
 
-    std::memset(&ctx, 0, sizeof(ctx));
+    ctx = M68KEmuContext{};
     const ULONG logical_size = 0x240000U;
     /* In plain builds add 16 tail guard bytes so negative-control OOB reads fail
        deterministically without SIGSEGV; under ASan keep exact size so ASan catches real OOB. */

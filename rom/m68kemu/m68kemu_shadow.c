@@ -351,11 +351,78 @@ static void m68k_drawinfo_extras(struct M68KEmuContext *ctx, ULONG md, struct Dr
    bytes, tf_Modulo per row), tf_CharLoc (offset << 16 | width per char),
    tf_CharSpace and tf_CharKern (words), for LoChar..HiChar plus the
    not-a-char glyph. Copy them into m68k memory once per font. */
-#define SHADOW_GLYPHS 13
+#define SHADOW_GLYPHS   13
+#define SHADOW_FONTNAME 15   /* 14 is SHADOW_OWNRP in m68kemu_thunks.c */
+
+/* Return a 68k NUL-terminated copy of tf->tf_Message.mn_Node.ln_Name, shared
+   by TextFont shadows and AskFont. Matches cached strings by content so a
+   recycled native TextFont or ln_Name address after CloseFont/expunge or
+   shadow_destroy never aliases a stale name, deduplicates identical names
+   across sizes without 68k UAF, and handles NULL/empty names and >16-font
+   saturation safely. */
+ULONG m68k_font_name(struct M68KEmuContext *ctx, struct TextFont *tf)
+{
+    const char *s = tf ? (const char *)tf->tf_Message.mn_Node.ln_Name : NULL;
+    size_t slen;
+    ULONG naddr = 0, nlen;
+    int free_slot = -1;
+
+    if (!s || !s[0])
+    {
+        for (int k = 0; k < 16; k++)
+            if (tf && ctx->fontnames[k].font == tf)
+                ctx->fontnames[k].font = NULL;
+        return 0;
+    }
+    for (int k = 0; k < 16; k++)
+    {
+        ULONG cn = ctx->fontnames[k].name;
+        if (cn && cn < ctx->mem_size &&
+            memchr(ctx->mem + cn, 0, ctx->mem_size - cn) &&
+            strcmp((const char *)(ctx->mem + cn), s) == 0)
+        {
+            ctx->fontnames[k].font = tf;
+            return cn;
+        }
+        if (ctx->fontnames[k].font == tf)
+            ctx->fontnames[k].font = NULL;
+        if (!cn && free_slot < 0)
+            free_slot = k;
+    }
+    for (UWORD j = 0; j < ctx->num_shadows; j++)
+        if (ctx->shadow_map[j].type == SHADOW_FONTNAME)
+        {
+            ULONG cn = ctx->shadow_map[j].m68k_addr;
+            if (cn && cn < ctx->mem_size &&
+                memchr(ctx->mem + cn, 0, ctx->mem_size - cn) &&
+                strcmp((const char *)(ctx->mem + cn), s) == 0)
+                return cn;
+        }
+    slen = strlen(s);
+    if (slen >= ctx->mem_size)
+        return 0;
+    nlen = (ULONG)slen + 1;
+    if (!(naddr = M68KEmu_HeapAlloc(ctx, nlen, 0)))
+        return 0;
+    memcpy(ctx->mem + naddr, s, nlen);
+    if (free_slot >= 0)
+    {
+        ctx->fontnames[free_slot].font = tf;
+        ctx->fontnames[free_slot].name = naddr;
+    }
+    else if (!shadow_register(ctx, naddr, ctx->mem + naddr, SHADOW_FONTNAME))
+    {
+        M68KEmu_HeapFree(ctx, naddr, nlen);
+        return 0;
+    }
+    return naddr;
+}
 
 static void m68k_textfont_extras(struct M68KEmuContext *ctx, ULONG mf, struct TextFont *tf)
 {
     ULONG count, i, blk = 0, loc, space, kern, data, size;
+
+    m68k_write32(ctx, mf + 10, m68k_font_name(ctx, tf));
 
     if (!tf->tf_CharLoc || tf->tf_HiChar < tf->tf_LoChar)
         return;
@@ -451,6 +518,14 @@ void shadow_destroy(struct M68KEmuContext *ctx,
                     const struct M68KStructLayout *layout,
                     ULONG m68k_addr)
 {
+    if (layout && !strcmp(layout->name, "TextFont"))
+    {
+        void *tf = shadow_lookup(ctx, m68k_addr);
+        if (tf)
+            for (int k = 0; k < 16; k++)
+                if (ctx->fontnames[k].font == tf)
+                    ctx->fontnames[k].font = NULL;
+    }
     shadow_remove(ctx, m68k_addr);
     M68KEmu_HeapFree(ctx, m68k_addr, layout->m68k_size);
 }

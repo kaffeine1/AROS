@@ -216,3 +216,15 @@ test-execbase-private-sanitize:
 	$(PYTHON) "$(TEST_DIR)/regressions/run_execbase_private.py" --cc "$(CC)" --sanitize $(EXECBASE_PRIVATE_ARGS)
 
 .PHONY: test-execbase-private test-execbase-private-sanitize
+
+# Font bridge (TextAttr/TTextAttr and TextFont names): ordinary fixture in test, sanitizer optional.
+FONT_BRIDGE_ARGS ?=
+test: test-font-bridge
+
+test-font-bridge:
+	$(PYTHON) "$(TEST_DIR)/regressions/run_font_bridge.py" --cxx "$(CXX)" $(FONT_BRIDGE_ARGS)
+
+test-font-bridge-sanitize:
+	$(PYTHON) "$(TEST_DIR)/regressions/run_font_bridge.py" --cxx "$(CXX)" --sanitize $(FONT_BRIDGE_ARGS)
+
+.PHONY: test-font-bridge test-font-bridge-sanitize

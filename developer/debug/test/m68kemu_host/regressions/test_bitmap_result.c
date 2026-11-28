@@ -38,6 +38,7 @@ struct M68KEmuContext {
  UBYTE *mem;ULONG mem_size,bump;UWORD num_shadows;BOOL shadow_full_logged;
  struct {ULONG m68k_addr;void *native_ptr;UWORD type;UBYTE streams_valid;BPTR stream_native[3];ULONG stream_handle[3];} shadow_map[M68KEMU_MAX_SHADOWS];
  BPTR *handles;ULONG num_handles;UWORD num_libs;struct {ULONG m68k_addr;} libs[4];char program_name[32];
+ struct {void *font;ULONG name;} fontnames[16];   /* shadow_destroy clears a TextFont's entry */
 };
 static unsigned checks,failures,alloc_calls,native_frees,bad_frees,live_native,guest_alloc_calls,guest_frees,syncs,logs;
 static BOOL alloc_fail,heap_fail,missing_layout;

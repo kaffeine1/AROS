@@ -6568,15 +6568,95 @@ static IPTR thunk_gfx_LoadRGB32(struct M68KEmuContext *ctx, void *cpu)
     return 0;
 }
 
-/* an m68k TextAttr: ta_Name(4) ta_YSize(2) ta_Style(1) ta_Flags(1) */
+extern ULONG m68k_font_name(struct M68KEmuContext *ctx, struct TextFont *tf);
+
+/* an m68k TextAttr: ta_Name(4) ta_YSize(2) ta_Style(1) ta_Flags(1).
+   Validates the full 8-byte span and a non-empty NUL-terminated ta_Name
+   inside containment, and strips FSF_TAGGED for plain struct TextAttr callers
+   so native font routines never read tta_Tags past a 16-byte stack TextAttr. */
 static BOOL textattr_in(struct M68KEmuContext *ctx, ULONG m68k_ta, struct TextAttr *ta)
 {
-    if (!m68k_ta || m68k_ta >= ctx->mem_size) return FALSE;
-    ta->ta_Name  = (STRPTR)m68k_to_host(ctx, m68k_read32(ctx, m68k_ta + M68K_TA_NAME));
+    ULONG name;
+    if (!m68k_in_mem(ctx, m68k_ta, 8)) return FALSE;
+    name = m68k_read32(ctx, m68k_ta + M68K_TA_NAME);
+    if (!name || name >= ctx->mem_size || !ctx->mem[name] ||
+        !memchr(ctx->mem + name, 0, ctx->mem_size - name))
+        return FALSE;
+    ta->ta_Name  = (STRPTR)(ctx->mem + name);
     ta->ta_YSize = m68k_read16(ctx, m68k_ta + M68K_TA_YSIZE);
-    ta->ta_Style = ctx->mem[m68k_ta + M68K_TA_STYLE];
+    ta->ta_Style = ctx->mem[m68k_ta + M68K_TA_STYLE] & (UBYTE)~FSF_TAGGED;
     ta->ta_Flags = ctx->mem[m68k_ta + M68K_TA_FLAGS];
-    return ta->ta_Name != NULL;
+    return TRUE;
+}
+
+/* an m68k TextAttr or TTextAttr (+8 tta_Tags when FSF_TAGGED is set).
+   Strictly accepts only TA_DeviceDPI (packed numeric (XDPI<<16)|YDPI) in
+   caller-owned tags[2] because unknown TAG_USER data may be guest pointers
+   (e.g. OT_Indirect tags). Handles TAG_IGNORE/TAG_SKIP/TAG_MORE/TAG_DONE,
+   rejects malformed, OOB, cyclic, or unsupported tag lists, and strips
+   FSF_TAGGED when an 8-byte TextAttr inherited it without a valid tag list. */
+static BOOL ttextattr_in(struct M68KEmuContext *ctx, ULONG m68k_ta,
+                         struct TTextAttr *tta, struct TagItem tags[2])
+{
+    memset(tta, 0, sizeof(*tta));
+    if (!textattr_in(ctx, m68k_ta, (struct TextAttr *)tta))
+        return FALSE;
+    if ((ctx->mem[m68k_ta + M68K_TA_STYLE] & FSF_TAGGED) && m68k_in_mem(ctx, m68k_ta, 12))
+    {
+        ULONG p = m68k_read32(ctx, m68k_ta + 8);
+        if (p && m68k_in_mem(ctx, p, 8) && tags)
+        {
+            int guard = 0;
+            BOOL valid = FALSE, has_dpi = FALSE;
+            ULONG dpi = 0;
+            while (guard++ < 256)
+            {
+                ULONG tag, val;
+                if (!m68k_in_mem(ctx, p, 8))
+                    break;
+                tag = m68k_read32(ctx, p);
+                val = m68k_read32(ctx, p + 4);
+                if (tag == TAG_DONE) { valid = TRUE; break; }
+                if (tag == TAG_IGNORE)
+                {
+                    if (8 > ctx->mem_size - p) break;
+                    p += 8;
+                    continue;
+                }
+                if (tag == TAG_MORE)
+                {
+                    if (!val) { valid = TRUE; break; }
+                    p = val;
+                    continue;
+                }
+                if (tag == TAG_SKIP)
+                {
+                    if (val > 0x100000UL || 8 * (val + 1) > ctx->mem_size - p) break;
+                    p += 8 * (val + 1);
+                    continue;
+                }
+                if (tag != TA_DeviceDPI)
+                    break;
+                if (!has_dpi)
+                {
+                    dpi = val;
+                    has_dpi = TRUE;
+                }
+                if (8 > ctx->mem_size - p) break;
+                p += 8;
+            }
+            if (valid && has_dpi)
+            {
+                tags[0].ti_Tag = TA_DeviceDPI;
+                tags[0].ti_Data = (IPTR)dpi;
+                tags[1].ti_Tag = TAG_DONE;
+                tags[1].ti_Data = 0;
+                tta->tta_Style |= FSF_TAGGED;
+                tta->tta_Tags = tags;
+            }
+        }
+    }
+    return TRUE;
 }
 
 /* struct TextExtent in 68k order: te_Width, te_Height, te_Extent MinX/MinY/MaxX/MaxY */
@@ -6640,27 +6720,11 @@ static IPTR thunk_gfx_AskFont(struct M68KEmuContext *ctx, void *cpu)
 {
     struct RastPort *rp = resolve_rp(ctx, THUNK_A(1));
     struct TextFont *tf = rp && rp->Font ? rp->Font : GfxBase->DefaultFont;
-    ULONG ta = THUNK_A(0), name = 0;
-    int i, free_slot = -1;
+    ULONG ta = THUNK_A(0);
 
     if (!tf || !m68k_in_mem(ctx, ta, 8))
         return 0;
-    for (i = 0; i < 16; i++)
-    {
-        if (ctx->fontnames[i].font == tf) { name = ctx->fontnames[i].name; break; }
-        if (!ctx->fontnames[i].font && free_slot < 0) free_slot = i;
-    }
-    if (!name && tf->tf_Message.mn_Node.ln_Name && free_slot >= 0)
-    {
-        ULONG len = strlen(tf->tf_Message.mn_Node.ln_Name);
-        if ((name = M68KEmu_HeapAlloc(ctx, len + 1, 0)))
-        {
-            memcpy(ctx->mem + name, tf->tf_Message.mn_Node.ln_Name, len + 1);
-            ctx->fontnames[free_slot].font = tf;
-            ctx->fontnames[free_slot].name = name;
-        }
-    }
-    m68k_write32(ctx, ta, name);
+    m68k_write32(ctx, ta, m68k_font_name(ctx, tf));
     m68k_write16(ctx, ta + 4, tf->tf_YSize);
     ctx->mem[ta + 6] = tf->tf_Style;
     ctx->mem[ta + 7] = tf->tf_Flags;
@@ -6670,22 +6734,34 @@ static IPTR thunk_gfx_AskFont(struct M68KEmuContext *ctx, void *cpu)
 /* graphics -72: OpenFont(A0=textAttr) -> D0=font */
 static IPTR thunk_gfx_OpenFont(struct M68KEmuContext *ctx, void *cpu)
 {
-    struct TextAttr ta;
+    struct TTextAttr tta;
+    struct TagItem tags[2];
     struct TextFont *font;
-    if (!textattr_in(ctx, THUNK_A(0), &ta)) return 0;
-    font = OpenFont(&ta);
+    ULONG mfont;
+    if (!ttextattr_in(ctx, THUNK_A(0), &tta, tags)) return 0;
+    font = OpenFont((struct TextAttr *)&tta);
+    if (!font) return 0;
     /* programs read tf_YSize, tf_Baseline... from the font */
-    return font ? (IPTR)shadow_create_by_name(ctx, "TextFont", font) : 0;
+    mfont = shadow_create_by_name(ctx, "TextFont", font);
+    if (!mfont)
+        CloseFont(font);
+    return (IPTR)mfont;
 }
 
 /* diskfont -30: OpenDiskFont(A0=textAttr) -> D0=font */
 static IPTR thunk_diskfont_OpenDiskFont_m(struct M68KEmuContext *ctx, void *cpu)
 {
-    struct TextAttr ta;
+    struct TTextAttr tta;
+    struct TagItem tags[2];
     struct TextFont *font;
-    if (!textattr_in(ctx, THUNK_A(0), &ta)) return 0;
-    font = OpenDiskFont(&ta);
-    return font ? (IPTR)shadow_create_by_name(ctx, "TextFont", font) : 0;
+    ULONG mfont;
+    if (!ttextattr_in(ctx, THUNK_A(0), &tta, tags)) return 0;
+    font = OpenDiskFont((struct TextAttr *)&tta);
+    if (!font) return 0;
+    mfont = shadow_create_by_name(ctx, "TextFont", font);
+    if (!mfont)
+        CloseFont(font);
+    return (IPTR)mfont;
 }
 
 /* ── character hooks: native code formats, the program's hook gets the

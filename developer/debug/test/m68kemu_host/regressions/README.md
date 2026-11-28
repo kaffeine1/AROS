@@ -964,3 +964,62 @@ production includes without compiling or executing a test. These focused
 checks do not set up a whole ExecBase, run the CPU or any guest code, take a
 real lock, call exec, or qualify a complete library or application; in
 particular they do not show what a program does with the empty lists.
+
+## Font bridge
+
+Run from the repository root:
+
+```sh
+make -C developer/debug/test/m68kemu_host test-font-bridge
+make -C developer/debug/test/m68kemu_host test-font-bridge-sanitize
+```
+
+The ordinary fixture is part of the host Makefile's `test` target. It needs
+Python 3.9+ and a C++17 compiler; ASan/UBSan are optional. `PYTHON` and `CXX`
+select those tools. `FONT_BRIDGE_ARGS` passes runner options such as
+`--source-root /path/to/AROS`, `--build-dir /tmp/font-bridge`, and
+`--prepare-only`. Use a fresh build directory; the default temporary directory
+is removed. The fixture is built with `-std=c++17 -Wall -Wextra -Werror`, so a
+compiler warning fails the target; the sanitizer target adds ASan and UBSan
+without recovery.
+
+When a 68k program opens a font with `OpenFont()` or `OpenDiskFont()`, the
+bridge validates `struct TextAttr` (and `struct TTextAttr` when `FSF_TAGGED` is
+set), forwarding only `TA_DeviceDPI` while rejecting unknown `TAG_USER` tags,
+malformed/cyclic/out-of-bounds tag lists, empty names, and truncated inputs,
+and stripping `FSF_TAGGED` for plain `TextAttr` callers. On the way back,
+`m68k_font_name()` populates the guest `TextFont` shadow's `ln_Name` and serves
+`AskFont()` from content-matched containment copies across `ctx->fontnames[16]`
+and a dedicated `SHADOW_FONTNAME` shadow type disjoint from `SHADOW_OWNRP`,
+pinning each shadow's `native_ptr` to its containment copy rather than a native
+font string pointer.
+
+The runner extracts the production heap, shadow, `TextFont` layout, `m68k_font_name`,
+`m68k_textfont_extras`, `shadow_create`/`shadow_destroy`, `textattr_in`,
+`ttextattr_in`, `thunk_gfx_AskFont`, `thunk_gfx_OpenFont`,
+`thunk_diskfont_OpenDiskFont_m`, and `thunk_graphics_CloseFont` functions along
+with `SHADOW_GLYPHS`, `SHADOW_OWNRP`, and `SHADOW_FONTNAME` constants. The
+fixture mocks `OpenFont()`, `OpenDiskFont()`, and `CloseFont()` in-process and
+requires no AROS SDK or guest disk fonts.
+
+The 56 checks cover baseline `OpenFont()`/`OpenDiskFont()`/`CloseFont()`/`AskFont()`
+round-trips, `TextFont` shadow fields and `ln_Name` population (including
+`tf_CharLoc == NULL`), `TextAttr` field fidelity and missing fonts, valid
+`TTextAttr` `TAG_MORE` chains and 8-byte `TextAttr` `FSF_TAGGED` stripping,
+bounds/NUL/empty-name guards, `CloseFont()` rollback when `shadow_map` is full,
+strict `TA_DeviceDPI` allowlisting and cycle/overflow rejection, `fontnames[16]`
+and `SHADOW_FONTNAME` lifecycle across `CloseFont`/`shadow_destroy`/recycling,
+family deduplication, `>16`-font saturation/reopen/rollback, disjointness and
+coexistence with `SHADOW_OWNRP`, and non-dangling containment resolution via
+`m68k_to_host_or_shadow()`.
+
+The fixture prints `FAIL: ...` for each failed check and a final
+`m68kemu font bridge: 56 checks, <n> failed` line, exiting 1 if any check
+failed. On an unpatched tree, or a tree where `SHADOW_FONTNAME` collides with
+`SHADOW_OWNRP`, the corresponding checks fail. Sanitized runs disable leak
+detection by default; `ASAN_OPTIONS` can override it.
+
+`--prepare-only --build-dir /tmp/font-bridge` emits the extracted production
+includes without compiling or executing a test. These focused checks do not run
+the CPU or guest code, call native `graphics.library` or `diskfont.library`,
+depend on guest `FONTS:` assets, or qualify a complete library or application.

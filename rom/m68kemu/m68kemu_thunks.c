@@ -6807,6 +6807,55 @@ static IPTR thunk_locale_FormatDate_m(struct M68KEmuContext *ctx, void *cpu)
     return 0;
 }
 
+/* locale -66: FormatString(A0=locale, A1=fmtTemplate, A2=dataStream, A3=putCharFunc) -> D0=next data.
+   The native call calls putCharFunc for every character, and the program's
+   hook is 68k code. As for FormatDate, the native call fills a buffer and
+   the program's hook gets the characters after the thunk. The result is the
+   program's own data stream behind the arguments the template took, counted
+   as translate_fmt_args() counts them for RawDoFmt(). A template or a data
+   stream that does not start inside the program's memory is not read. */
+static IPTR thunk_locale_FormatString_m(struct M68KEmuContext *ctx, void *cpu)
+{
+    struct Locale *loc = (struct Locale *)m68k_to_host_or_shadow(ctx, THUNK_A(0));
+    ULONG mtmpl = THUNK_A(1), margs = THUNK_A(2), size = 0, used = 0, result;
+    CONST_STRPTR tmpl = (CONST_STRPTR)m68k_to_host(ctx, mtmpl);
+    char buf[PCH_BUFLEN];
+    struct pch_collect c = { buf, 0 };
+    struct Hook h;
+    APTR stream;
+    IPTR *counted;
+    const char *f;
+    BOOL takes = FALSE, readable = !margs || m68k_to_host(ctx, margs);
+    int n = 0;
+
+    if (!tmpl)
+        return margs;               /* no template to read: nothing is taken from the stream either */
+    if (readable && (counted = translate_fmt_args(ctx, (const char *)tmpl, margs, &n, &used)))
+        FreeMem(counted, n * sizeof(IPTR));
+    result = margs + used;
+    if (!THUNK_A(3))
+        return result;              /* no hook: the characters have nowhere to go */
+    for (f = (const char *)tmpl; *f && !takes; f++)
+        if (*f == '%')
+        {
+            if (f[1] == '%')
+                f++;                /* a literal percent sign takes nothing */
+            else if (f[1])
+                takes = TRUE;
+        }
+    stream = readable ? m68k_to_native_fmt_stream(ctx, (const char *)tmpl, margs, &size) : NULL;
+    if (takes && !stream)
+        return result;              /* the native call would read arguments that are not there */
+    memset(&h, 0, sizeof(h));
+    h.h_Entry = (HOOKFUNC)pch_collect_func;
+    h.h_Data  = &c;
+    FormatString(loc, tmpl, (RAWARG)stream, &h);
+    if (stream)
+        FreeMem(stream, size);
+    pch_emit(ctx, THUNK_A(3), THUNK_A(0), &c, result);
+    return result;
+}
+
 /* a native string the program reads: inside its memory as is, otherwise a
    copy in its memory, made again if the native text has changed */
 static ULONG native_str_out(struct M68KEmuContext *ctx, CONST_STRPTR s)
@@ -6851,10 +6900,11 @@ static IPTR thunk_locale_GetLocaleStr_m(struct M68KEmuContext *ctx, void *cpu)
 
 const struct M68KThunkEntry m68kemu_thunks_locale_manual[] = {
     { 60, thunk_locale_FormatDate_m },
+    { 66, thunk_locale_FormatString_m },
     { 72, thunk_locale_GetCatalogStr_m },
     { 78, thunk_locale_GetLocaleStr_m },
 };
-const ULONG m68kemu_thunks_locale_manual_count = 3;
+const ULONG m68kemu_thunks_locale_manual_count = 4;
 
 const struct M68KThunkEntry m68kemu_thunks_diskfont_manual[] = {
     { 30, thunk_diskfont_OpenDiskFont_m },

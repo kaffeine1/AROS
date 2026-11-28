@@ -614,7 +614,7 @@ Counts exclude the `{ 0, NULL }` terminators, which the dispatcher skips.
 | `m68kemu_thunks_graphics_manual` | graphics.library | 42 | `m68kemu_thunks.c` |
 | `m68kemu_thunks_gadtools_manual` | gadtools.library | 15 | `m68kemu_thunks.c` |
 | `m68kemu_thunks_utility_manual` | utility.library | 20 | `m68kemu_thunks.c`, `m68kemu_tags.c` |
-| `m68kemu_thunks_locale_manual` | locale.library | 3 | `m68kemu_thunks.c` |
+| `m68kemu_thunks_locale_manual` | locale.library | 4 | `m68kemu_thunks.c` |
 | `m68kemu_thunks_diskfont_manual` | diskfont.library | 1 | `m68kemu_thunks.c` |
 | `m68kemu_icon_manual` | icon.library | 15 | `m68kemu_icon.c` |
 | `m68kemu_cx_manual` | commodities.library | 2 | `m68kemu_math.c` |
@@ -785,9 +785,11 @@ memory; `CallHookPkt` calls a 68k hook; `SDivMod32`, `UDivMod32`, `SMult64`,
 `UMult64` return their second result in D1; `Amiga2Date`, `Date2Amiga`,
 `CheckDate` translate `ClockData`.
 
-**locale.library**: `FormatDate` uses the character-hook mechanism (the native
-call collects the characters; a 68k stub run through `tail_pc` calls the
-program's hook once per character, NUL included); `GetCatalogStr`/`GetLocaleStr`
+**locale.library**: `FormatDate` and `FormatString` use the character-hook
+mechanism (the native call collects the characters; a 68k stub run through
+`tail_pc` calls the program's hook once per character, NUL included);
+`FormatString` returns the program's data stream behind the arguments the
+template took; `GetCatalogStr`/`GetLocaleStr`
 copy the native string into containment (`ctx->strcache[64]`).
 
 **icon.library** (`m68kemu_icon.c`): a native `DiskObject` is given to the
